@@ -235,3 +235,66 @@ Likewise, we can now import our genes:
 Now that you have an operational instance that is aware of your new reference, you can load study data as described in the [official documentation](https://docs.cbioportal.org/data-loading/).  This primarly consists of preparing your data files in the formats described in the documentation and then running some variation of `./metaImport.py -s /data/study/ -u http://localhost:8080 -v` to load the study data into your instance.
 
 While we described some example modifications to the loading scripts in the cbioportal-core repository to accommodate your new reference, further modifications may be required depending on what types of data you load. You can follow the same pattern as above to publish a new version of cbioportal-core, point cbioportal to it, and rebuild your container.
+
+### Deploying to production
+With our modifications in place, we can deploy our customized cBioPortal to an Amazon EC2 instance.
+
+First you will want to set up Docker:
+
+```
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install git nginx docker docker-compose-plugin
+sudo groupadd docker
+sudo usermod -aG docker ${USER}
+```
+
+Next, you will want to check out the Docker compose configuration. You can start from the canonical one at `https://github.com/cBioPortal/cbioportal-docker-compose.git` or the one you have already modified locally.
+
+Start up your instance with `docker compose -f docker-compose.yml -f dev/open-ports.yml up -d`. This should boot up all the services you need.
+
+The final step is to expose the running instance to the internet and set up a certificate for HTTPS access. We installed `nginx` in a previous step so we will use that.
+
+Open up `/etc/nginx/sites-available/default` and add the following lines:
+
+```
+server {
+        listen 80;
+        listen [::]:80;
+
+        server_name your-custom-domain.com;
+        location / {
+          proxy_set_header  X-Forwarded-For $remote_addr;
+          proxy_set_header  Host $http_host;
+          proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header  X-Forwarded-Proto $scheme;
+          proxy_set_header  X-Forwarded-Ssl on; # Optional
+          proxy_set_header  X-Forwarded-Port $server_port;
+          proxy_set_header  X-Forwarded-Host $host;
+          proxy_pass        "http://127.0.0.1:8080";
+        }
+}
+
+```
+
+Restart `nginx` with `sudo service nginx restart`. It will now proxy requests to your domain to the cBioPortal instance running on the machine. Finally, you can set up an SSL certificate by running
+
+```
+sudo snap install --classic certbot
+sudo certbot
+```
+
+and following the prompts. You should now be able to access your instance at https://your-custom-domain.com.
+
